@@ -133,6 +133,8 @@ class SearchTerm(db.Model):
     association = db.relationship('Gif',secondary=tags,backref=db.backref('search',lazy='dynamic'),lazy='dynamic')
     def __repr__(self):
         return "Search Term: {}".format(self.term)
+    def __str__(self):
+        return term
     # TODO 364: Add code for the SearchTerm model such that it has the following fields:
     # id (Integer, primary key)
     # term (String, up to 32 characters, unique) -- You want to ensure the database cannot save non-unique search terms
@@ -201,7 +203,7 @@ def get_gif_by_id(id):
     g = Gif.query.filter_by(id=id).first()
     return g
 
-def get_or_create_gif(title, url):
+def get_or_create_gif(db_session, title, url):
     """Always returns a Gif instance"""
     gif = db_session.query(Gif).filter_by(title=title).first()
     if gif:
@@ -214,17 +216,19 @@ def get_or_create_gif(title, url):
 
     # TODO 364: This function should get or create a Gif instance. Determining whether the gif already exists in the database should be based on the gif's title.
 
-def get_or_create_search_term(term):
+def get_or_create_search_term(db_session, term):
     """Always returns a SearchTerm instance"""
-    search_term = db_session.query(Search).filter_by(term=term).first()
+    search_term = db_session.query(SearchTerm).filter_by(term=term).first()
     if search_term:
         return search_term
     else:
-        search_term = Search(term=term)
+        search_term = SearchTerm(term=term)
         gif_list = get_gifs_from_giphy(term)
         for g in gif_list:
-            gif = get_or_create_gif(db_session, title=g["title"], url=g["url"])
-            search_term.gifs.append(gif)
+            title = g["title"]
+            url = g["embed_url"]
+            gif = get_or_create_gif(db_session, title=title, url=url)
+            search_term.association.append(gif)
         db_session.add(search_term)
         db_session.commit()
         return search_term
@@ -242,7 +246,7 @@ def get_or_create_search_term(term):
     # HINT: I recommend using print statements as you work through building this function and use it in invocations in view functions to ensure it works as you expect!
 
 
-def get_or_create_collection(name, current_user, gif_list=[]):
+def get_or_create_collection(db_session, name, current_user, gif_list=[]):
     """Always returns a PersonalGifCollection instance"""
     gif_collection = db_session.query(PersonalGifCollection).filter_by(name=name,user_id=current_user.id).first()
     if gif_collection:
@@ -320,8 +324,8 @@ def secret():
 def index():
     form = GifSearchForm()
     if form.validate_on_submit():
-        get_or_create_search_term(term=form.search.data)
-        return redirect(url_for(search_results))
+        term = get_or_create_search_term(db.session, term=form.search.data)
+        return redirect(url_for('search_results', search_term=term.term))
     # TODO 364: Edit this view function, which has a provided return statement, so that the GifSearchForm can be rendered.
     # If the form is submitted successfully:
     # invoke get_or_create_search_term on the form input and redirect to the function corresponding to the path /gifs_searched/<search_term> in order to see the results of the gif search. (Just a couple lines of code!)
@@ -333,8 +337,9 @@ def index():
 @app.route('/gifs_searched/<search_term>')
 def search_results(search_term):
     term = SearchTerm.query.filter_by(term=search_term).first()
-    relevant_gifs = term.gifs.all()
+    relevant_gifs = term.association.all()
     return render_template('searched_gifs.html',gifs=relevant_gifs,term=term)
+
 
 @app.route('/search_terms')
 def search_terms():
