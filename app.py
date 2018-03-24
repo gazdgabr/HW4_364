@@ -71,7 +71,8 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(255), unique=True, index=True)
     email = db.Column(db.String(64), unique=True, index=True)
     password_hash = db.Column(db.String(128))
-    collections = db.relationship('PersonalGifCollection',secondary=tags,backref=db.backref('users',lazy='dynamic'),lazy='dynamic')
+    collection = db.relationship('PersonalGifCollection', backref='User')
+    #collections = db.relationship('PersonalGifCollection',secondary=tags,backref=db.backref('users',lazy='dynamic'),lazy='dynamic')
     #TODO 364: In order to complete a relationship with a table that is detailed below (a one-to-many relationship for users and gif collections), you'll need to add a field to this User model. (Check out the TODOs for models below for more!)
     # Remember, the best way to do so is to add the field, save your code, and then create and run a migration!
 
@@ -115,7 +116,8 @@ class PersonalGifCollection(db.Model):
     __tablename__ = "personalgifcollections"
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128))
-    gifs = db.relationship('Gif',secondary=tags,backref=db.backref('personalgifcollections',lazy='dynamic'),lazy='dynamic')
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    gifs = db.relationship('Gif',secondary=user_collection,backref=db.backref('personalgifcollections',lazy='dynamic'),lazy='dynamic')
     # TODO 364: Add code for the PersonalGifCollection model such that it has the following fields:
     # id (Integer, primary key)
     # name (String, up to 255 characters)
@@ -128,7 +130,7 @@ class SearchTerm(db.Model):
     __tablename__ = "search"
     id = db.Column(db.Integer, primary_key=True)
     term = db.Column(db.String(32), unique=True)
-
+    association = db.relationship('Gif',secondary=tags,backref=db.backref('search',lazy='dynamic'),lazy='dynamic')
     def __repr__(self):
         return "Search Term: {}".format(self.term)
     # TODO 364: Add code for the SearchTerm model such that it has the following fields:
@@ -183,8 +185,11 @@ class CollectionCreateForm(FlaskForm):
 
 def get_gifs_from_giphy(search_string):
     """ Returns data from Giphy API with up to 5 gifs corresponding to the search input"""
-    baseurl = "https://api.giphy.com/v1/gifs/search"
-    pass # Replace with code
+    base_url = "https://api.giphy.com/v1/gifs/search"
+    params_dict = {"api_key":api_key, "q":search_string, "limit":"32"}
+    result = json.loads(requests.get(base_url, params=params_dict).text)
+
+    return result["data"][:5]
     # TODO 364: This function should make a request to the Giphy API using the input search_string, and your api_key (imported at the top of this file)
     # Then the function should process the response in order to return a list of 5 gif dictionaries.
     # HINT: You'll want to use 3 parameters in the API request -- api_key, q, and limit. You may need to do a bit of nested data investigation and look for API documentation.
@@ -198,11 +203,31 @@ def get_gif_by_id(id):
 
 def get_or_create_gif(title, url):
     """Always returns a Gif instance"""
-    pass # Replace with code
+    gif = db_session.query(Gif).filter_by(title=title).first()
+    if gif:
+        return gif
+    else:
+        gif = Gif(title=title, embedURL=url)
+        db_session.add(gif)
+        db_session.commit()
+        return gif
+
     # TODO 364: This function should get or create a Gif instance. Determining whether the gif already exists in the database should be based on the gif's title.
 
 def get_or_create_search_term(term):
     """Always returns a SearchTerm instance"""
+    search_term = db_session.query(Search).filter_by(term=term).first()
+    if search_term:
+        return search_term
+    else:
+        search_term = Search(term=term)
+        gif_list = get_gifs_from_giphy(term)
+        for g in gif_list:
+            gif = get_or_create_gif(db_session, title=g["title"], url=g["url"])
+            search_term.gifs.append(gif)
+        db_session.add(search_term)
+        db_session.commit()
+        return search_term
     # TODO 364: This function should return the search term instance if it already exists.
 
     # If it does not exist in the database yet, this function should create a new SearchTerm instance.
@@ -216,9 +241,20 @@ def get_or_create_search_term(term):
 
     # HINT: I recommend using print statements as you work through building this function and use it in invocations in view functions to ensure it works as you expect!
 
+
 def get_or_create_collection(name, current_user, gif_list=[]):
     """Always returns a PersonalGifCollection instance"""
-    pass # Replace with code
+    gif_collection = db_session.query(PersonalGifCollection).filter_by(name=name,user_id=current_user.id).first()
+    if gif_collection:
+        return gif_collection
+    else:
+        gif_collection = PersonalGifCollection(name=name,user_id=current_user.id,gifs=[])
+        for gif in gif_list:
+            gif_collection.gifs.append(gif)
+        db_session.add(gif_collection)
+        db_session.commit()
+        return gif_collection
+
 
     # TODO 364: This function should get or create a personal gif collection. Uniqueness of the gif collection should be determined by the name of the collection and the id of the logged in user.
 
@@ -282,6 +318,10 @@ def secret():
 ## Other routes
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    form = GifSearchForm()
+    if form.validate_on_submit():
+        get_or_create_search_term(term=form.search.data)
+        return redirect(url_for(search_results))
     # TODO 364: Edit this view function, which has a provided return statement, so that the GifSearchForm can be rendered.
     # If the form is submitted successfully:
     # invoke get_or_create_search_term on the form input and redirect to the function corresponding to the path /gifs_searched/<search_term> in order to see the results of the gif search. (Just a couple lines of code!)
